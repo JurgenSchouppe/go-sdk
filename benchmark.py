@@ -12,6 +12,9 @@ import sys
 import random
 
 
+# TODO define limits to be used by everybody
+
+
 def log(message, error=True):
     func = inspect.currentframe().f_back.f_code
     final_msg = "(%s:%i) %s" % (
@@ -126,57 +129,15 @@ class HmyCLI:
         return pexpect.spawn('./hmy', command_toks, env=self.environment)
 
 
-def test_mnemonics_from_sdk(cli):
+def load_all_validator_keys(cli):
     assert isinstance(cli, HmyCLI)
-    addresses_added = set()
-    log("Testing...", error=False)
+    pass
 
-    with open('testHmyConfigs/sdkMnemonics.json') as f:
-        sdk_mnemonics = json.load(f)
-        if not sdk_mnemonics:
-            log("Could not load reference data.")
-            return False
 
-    passed = True
-    for test in sdk_mnemonics["data"]:
-        index = test["index"]
-        if index != 0:  # CLI currently uses a hardcoded index of 0.
-            continue
+def fund_source_accounts(cli):
+    assert isinstance(cli, HmyCLI)
+    pass
 
-        mnemonic = test["phrase"]
-        correct_address = test["addr"]
-        address_name = f'testHmyAcc_{random.randint(0,1e9)}'
-        while address_name in cli.addresses:
-            address_name = f'testHmyAcc_{random.randint(0,1e9)}'
-
-        try:
-            hmy = cli.expect_call(f"./hmy keys add {address_name} --recover --passphrase")
-            hmy.expect("Enter passphrase for account\r\n".encode())
-            hmy.sendline("")
-            hmy.expect("Repeat the passphrase:\r\n".encode())
-            hmy.sendline("")
-            hmy.expect("Enter mnemonic to recover keys from\r\n".encode())
-            hmy.sendline(mnemonic)
-            hmy.expect(pexpect.EOF)
-        except pexpect.ExceptionPexpect as e:
-            log(f"Exception occurred when adding a key with mnemonic."
-                f"\nException: {e}")
-            passed = False
-
-        hmy_address = cli.get_address(address_name)
-        if hmy_address != correct_address or hmy_address is None:
-            log(f"address does not match sdk's address. \n"
-                f"\tMnemonic: {mnemonic}\n"
-                f"\tCorrect address: {correct_address}\n"
-                f"\tCLI address: {hmy_address}")
-            passed = False
-        else:
-            addresses_added.add(address_name)
-
-    for address in addresses_added:
-        cli.remove_address(address)
-
-    return passed
 
 
 if __name__ == "__main__":
@@ -184,28 +145,18 @@ if __name__ == "__main__":
     logging.warning(f"[{datetime.datetime.now()}] {'=' * 10}")
     CLI = HmyCLI(environment=load_environment())
 
-    test_mnemonics_from_sdk(CLI)
 
+    load_all_validator_keys(CLI)
 
     # tests_results = []
     # pool = ThreadPool(processes=4)
-    # t1 = pool.apply_async(test_mnemonics_from_sdk,)
-    # t2 = pool.apply_async(test_mnemonics_from_sdk,)
-    # t3 = pool.apply_async(test_mnemonics_from_sdk,)
-    # t4 = pool.apply_async(test_mnemonics_from_sdk,)
+    # t1 = pool.apply_async(test_mnemonics_from_sdk, (CLI,))
+    # t2 = pool.apply_async(test_mnemonics_from_sdk, (CLI,))
+    # t3 = pool.apply_async(test_mnemonics_from_sdk, (CLI,))
+    # t4 = pool.apply_async(test_mnemonics_from_sdk, (CLI,))
     # tests_results.append(t1.get())
     # tests_results.append(t2.get())
     # tests_results.append(t3.get())
     # tests_results.append(t4.get())
 
-
-
-    #
-    # for name in KEYS_ADDED:
-    #     delete_from_keystore_by_name(name)
-    #
-    # if all(tests_results):
-    #     print("\nPassed all tests!\n")
-    # else:
-    #     print("\nFailed some tests, check logs.\n")
-    #     sys.exit(-1)
+    # print(tests_results)
