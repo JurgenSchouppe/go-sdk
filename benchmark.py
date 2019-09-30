@@ -13,6 +13,7 @@ import random
 
 
 # TODO define limits to be used by everybody
+# https://github.com/harmony-one/harmony/blob/master/internal/configs/sharding/testnet.go
 
 
 def log(message, error=True):
@@ -30,6 +31,7 @@ def log(message, error=True):
 
 
 def load_environment():
+    assert os.path.isfile("../harmony/scripts/setup_bls_build_flags.sh")
     try:
         # Requires the updated 'setup_bls_build_flags.sh'
         env_raw = subprocess.check_output("source ../harmony/scripts/setup_bls_build_flags.sh -v", shell=True)
@@ -131,12 +133,22 @@ class HmyCLI:
 
 def load_all_validator_keys(cli):
     assert isinstance(cli, HmyCLI)
-    pass
+    assert os.path.isdir("testnet_validator_keys")
+
+    for i, file in enumerate(os.listdir("testnet_validator_keys")):
+        if not file.endswith(".key"):
+            continue
+
+        account_name = f"testnetVal_{i}"
+        cli.remove_address(account_name)
+        response = cli.single_call(f"keys import-ks f{os.path.abspath(file)} {account_name}")
+
+
+
 
 
 def fund_source_accounts(cli):
     assert isinstance(cli, HmyCLI)
-    pass
 
 
 
@@ -144,7 +156,6 @@ if __name__ == "__main__":
     logging.basicConfig(filename="benchmark.log", filemode='a', format="%(message)s")
     logging.warning(f"[{datetime.datetime.now()}] {'=' * 10}")
     CLI = HmyCLI(environment=load_environment())
-
 
     load_all_validator_keys(CLI)
 
