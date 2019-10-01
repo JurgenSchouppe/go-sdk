@@ -24,6 +24,7 @@ ENDPOINTS = [
 # TODO fix duplicate name override on CLI
 # TODO define limits to be used by everybody
 # https://github.com/harmony-one/harmony/blob/master/internal/configs/sharding/testnet.go
+# https://github.com/harmony-one/harmony/blob/master/test/txgen/main.go
 
 
 def log(message, error=True):
