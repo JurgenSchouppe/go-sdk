@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 import subprocess
 from multiprocessing.pool import ThreadPool
+import multiprocessing
 import pexpect
 import os
 import shutil
@@ -10,8 +11,11 @@ import inspect
 import datetime
 import sys
 import random
+import math
 
 
+LOAD_KEY_THREAD_COUNT = multiprocessing.cpu_count()
+# TODO fix duplicate name override
 # TODO define limits to be used by everybody
 # https://github.com/harmony-one/harmony/blob/master/internal/configs/sharding/testnet.go
 
@@ -58,7 +62,7 @@ class HmyCLI:
             response = subprocess.check_output(["hmy", "keys", "location"], env=self.environment).decode().strip()
         except subprocess.CalledProcessError as err:
             log(f"[Critical] Could not get keystore path.\n"
-                f"Got exit code {err.returncode}. Msg: {err.output}")
+                f"\tGot exit code {err.returncode}. Msg: {err.output}")
             sys.exit(-1)
         if not os.path.exists(response):
             log(f"[Critical] '{response}' is not a valid path")
@@ -70,7 +74,7 @@ class HmyCLI:
             response = subprocess.check_output(["hmy", "keys", "list"], env=self.environment).decode()
         except subprocess.CalledProcessError as err:
             log(f"[Critical] Could not list addresses.\n"
-                f"Got exit code {err.returncode}. Msg: {err.output}")
+                f"\tGot exit code {err.returncode}. Msg: {err.output}")
             sys.exit(-1)
 
         lines = response.split("\n")
@@ -101,11 +105,10 @@ class HmyCLI:
 
         try:
             shutil.rmtree(key_file_path)
-        except shutil.Error as e:
+        except (shutil.Error, FileNotFoundError) as e:
             log(f"[KEY DELETE] Failed to delete dir: {key_file_path}\n"
-                f"Exception: {e}")
+                f"\tException: {e}")
             return
-
         del self.addresses[name]
 
     def single_call(self, command):
@@ -115,7 +118,7 @@ class HmyCLI:
         :raises: subprocess.CalledProcessError if something went wrong
         """
         command_toks = command.split(" ")
-        if command_toks[0] in {"./hmy", "hmy"}:
+        if command_toks[0] in {"./hmy", "/hmy", "hmy"}:
             command_toks = command_toks[1:]
         return subprocess.check_output(["hmy"] + command_toks, env=self.environment).decode()
 
@@ -131,25 +134,45 @@ class HmyCLI:
         return pexpect.spawn('./hmy', command_toks, env=self.environment)
 
 
-def load_all_validator_keys(cli):
+def load_all_validator_keys(cli, keys_dir):
     assert isinstance(cli, HmyCLI)
-    assert os.path.isdir("testnet_validator_keys")
+    assert os.path.isdir(keys_dir)
+    keys_paths = os.listdir(keys_dir)
 
-    for i, file in enumerate(os.listdir("testnet_validator_keys")):
-        if not file.endswith(".key"):
-            continue
+    def load_keys(start, end):
+        log(f"Loading validator keys from: {start} to: {end}", error=False)
+        abs_keys_path = os.path.abspath(keys_dir)
+        for i, file in enumerate(keys_paths[start: end]):
+            if not file.endswith(".key"):
+                continue
 
-        account_name = f"testnetVal_{i}"
-        cli.remove_address(account_name)
-        response = cli.single_call(f"keys import-ks f{os.path.abspath(file)} {account_name}")
+            log(f"Adding key: ({i+start}) {file}", error=False)
 
+            file_path = f"{abs_keys_path}/{file}"
+            account_name = f"testnetVal_{i+start}"
+            if not cli.get_address(account_name):
+                response = cli.single_call(f"keys import-ks {file_path} {account_name}").strip()
+                if f"Imported keystore given account alias of `{account_name}`" != response:
+                    log(f"Could not import validator key: {file}\n\t"
+                        f"Name: {account_name}")
+                    continue
 
+    key_count = len(keys_paths)
+    pool = ThreadPool(processes=LOAD_KEY_THREAD_COUNT)
+    steps = math.ceil(key_count / LOAD_KEY_THREAD_COUNT)
+    threads = []
+    for i in range(LOAD_KEY_THREAD_COUNT):
+        start_index = i * steps
+        end_index = (i + 1) * steps
+        threads.append(
+            pool.apply_async(load, (start_index, end_index)))
 
+    for thread in threads:
+        thread.get()
 
 
 def fund_source_accounts(cli):
     assert isinstance(cli, HmyCLI)
-
 
 
 if __name__ == "__main__":
@@ -157,17 +180,4 @@ if __name__ == "__main__":
     logging.warning(f"[{datetime.datetime.now()}] {'=' * 10}")
     CLI = HmyCLI(environment=load_environment())
 
-    load_all_validator_keys(CLI)
-
-    # tests_results = []
-    # pool = ThreadPool(processes=4)
-    # t1 = pool.apply_async(test_mnemonics_from_sdk, (CLI,))
-    # t2 = pool.apply_async(test_mnemonics_from_sdk, (CLI,))
-    # t3 = pool.apply_async(test_mnemonics_from_sdk, (CLI,))
-    # t4 = pool.apply_async(test_mnemonics_from_sdk, (CLI,))
-    # tests_results.append(t1.get())
-    # tests_results.append(t2.get())
-    # tests_results.append(t3.get())
-    # tests_results.append(t4.get())
-
-    # print(tests_results)
+    load_all_validator_keys(CLI, "testnet_validator_keys")
