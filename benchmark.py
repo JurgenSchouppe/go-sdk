@@ -13,9 +13,10 @@ import sys
 import random
 import math
 
+# Use threading b/c this script mostly just calls the CLI to do the heavy lifting.
 
 VERBOSE = True
-LOAD_KEY_THREAD_COUNT = multiprocessing.cpu_count()
+LOAD_KEYS_THREAD_COUNT = multiprocessing.cpu_count()
 ENDPOINTS = [
     "https://api.s0.b.hmny.io/",  # Endpoint for shard 0
     "https://api.s1.b.hmny.io/"   # Endpoint for shard 1
@@ -143,9 +144,7 @@ class HmyCLI:
             log(f"[Critical] Could not get balance for '{name}'.\n"
                 f"\tGot exit code {err.returncode}. Msg: {err.output}")
             return None
-        shard_balances = eval(response)  # Assumes that the return of CLI is list of dictionaries in plain text.
-        total_balance = sum(map(lambda e: e["amount"], shard_balances))
-        return {"total_amount": total_balance, "shard_amounts": shard_balances}
+        return eval(response)  # Assumes that the return of CLI is list of dictionaries in plain text.
 
     def single_call(self, command):
         """
@@ -170,44 +169,49 @@ class HmyCLI:
         return pexpect.spawn('./hmy', command_toks, env=self.environment)
 
 
-def load_all_validator_keys(cli, keys_dir, with_funds_report=True):
+def load_validator_keys(cli, src_keys_dir, quick_copy=False, get_funds=True):
     assert isinstance(cli, HmyCLI)
-    assert os.path.isdir(keys_dir)
-    keys_paths = os.listdir(keys_dir)
-    funds_report = {}
+    assert os.path.isdir(src_keys_dir)
+    keys_paths = os.listdir(src_keys_dir)
+    funds = {}
 
     def load_keys(start, end):
-        abs_keys_path = os.path.abspath(keys_dir)
+        abs_keys_path = os.path.abspath(src_keys_dir)
         for i, file in enumerate(keys_paths[start: end]):
             if not file.endswith(".key"):
                 continue
-
             file_path = f"{abs_keys_path}/{file}"
             account_name = f"testnetVal_{i+start}"
             if not cli.get_address(account_name):
                 log(f"Adding key: ({i+start}) {file}", error=False)
-                response = cli.single_call(f"keys import-ks {file_path} {account_name}").strip()
-                if f"Imported keystore given account alias of `{account_name}`" != response:
-                    log(f"Could not import validator key: {file}\n\t"
-                        f"Name: {account_name}")
-                    continue
-            if with_funds_report:
+                if quick_copy:
+                    keystore_acc_dir = f"{cli.keystore_path}/{account_name}"
+                    if not os.path.isdir(keystore_acc_dir):
+                        os.mkdir(keystore_acc_dir)
+                    shutil.copy(file_path, f"{keystore_acc_dir}/{file}")
+                else:
+                    response = cli.single_call(f"keys import-ks {file_path} {account_name}").strip()
+                    if f"Imported keystore given account alias of `{account_name}`" != response:
+                        log(f"Could not import validator key: {file}\n"
+                            f"\tName: {account_name}")
+                        continue
+            if get_funds:
                 log(f"Fetching balance: ({i+start}) {file}", error=False)
-                funds_report[account_name] = cli.get_balance(account_name)
+                funds[account_name] = cli.get_balance(account_name)
 
     key_count = len(keys_paths)
-    pool = ThreadPool(processes=LOAD_KEY_THREAD_COUNT)
-    steps = math.ceil(key_count / LOAD_KEY_THREAD_COUNT)
+    pool = ThreadPool(processes=LOAD_KEYS_THREAD_COUNT)
+    steps = math.ceil(key_count / LOAD_KEYS_THREAD_COUNT)
     threads = []
-    for i in range(LOAD_KEY_THREAD_COUNT):
+    for i in range(LOAD_KEYS_THREAD_COUNT):
         start_index = i * steps
         end_index = (i + 1) * steps
         threads.append(
             pool.apply_async(load_keys, (start_index, end_index)))
-
     for thread in threads:
-        thread.get()
-    return funds_report
+        thread.get()  # Wait until each thread is done.
+
+    return funds if get_funds else None
 
 
 def fund_source_accounts(cli):
@@ -219,17 +223,6 @@ if __name__ == "__main__":
     logging.warning(f"[{datetime.datetime.now()}] {'=' * 10}")
     CLI = HmyCLI(environment=load_environment(), api_endpoints=ENDPOINTS)
 
-    funds_report = load_all_validator_keys(CLI, "testnet_validator_keys")
+    funds_report = load_validator_keys(CLI, "testnet_validator_keys", get_funds=True, quick_copy=True)
     print(funds_report)
-    most_welthy = max(funds_report, key=lambda e: funds_report[e]["total_amount"])
-    print("max account ", max(funds_report, key=lambda e: funds_report[e]["total_amount"]))
-    print("len of funds ", len(funds_report))
-    print(funds_report[most_welthy])
-    """
-    max account  testnetVal_12
-    len of funds  800
-    {
-        'total_amount': 33022.435442326, 
-        'shard_amounts': [{'shard': 0, 'amount': 33022.435442326}, {'shard': 1, 'amount': 0.0}]
-    }
-    """
+    # TODO: first 'dry' run.
