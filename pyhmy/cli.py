@@ -10,41 +10,54 @@ def get_environment():
     Fetches the environment variables from the 'setup_bls_build_flags.sh' script
     in the harmony main repo. Also fetches the 'HOME' environment variable for HmyCLI.
     """
-    try:
-        go_path = subprocess.check_output(["go", "env", "GOPATH"]).decode().strip()
-        bls_setup_path = f"{go_path}/src/github.com/harmony-one/harmony/scripts/setup_bls_build_flags.sh"
-        assert os.path.isfile(bls_setup_path)
-        env_raw = subprocess.check_output(f"source {bls_setup_path} -v", shell=True)
-        environment = json.loads(env_raw)
-        environment["HOME"] = os.environ.get("HOME")
-    except (AssertionError, json.decoder.JSONDecodeError, subprocess.CalledProcessError) as _:
-        raise RuntimeError(f"Could not parse environment variables from setup_bls_build_flags.sh")
+    go_path = subprocess.check_output(["go", "env", "GOPATH"]).decode().strip()
+    setup_script_path = f"{go_path}/src/github.com/harmony-one/harmony/scripts/setup_bls_build_flags.sh"
+    assert os.path.isfile(setup_script_path)
+    response = subprocess.check_output(f"source {setup_script_path} -v", shell=True)
+    environment = json.loads(response)
+    environment["HOME"] = os.environ.get("HOME")
     return environment
 
 
 class HmyCLI:
-
     hmy_binary_path = "hmy"  # This attr should be set by the __init__.py of this module.
 
-    def __init__(self, environment, api_endpoints, hmy_binary_path=None):
+    def __init__(self, environment, hmy_binary_path=None):
         """
         :param environment: Dictionary of environment variables to be used in the CLI
-        :param api_endpoints: A list of api endpoints such that the i-th element is
-                              the endpoint for the i-th shard.
-        :param hmy_binary_path:
+        :param hmy_binary_path: An optional path to the harmony binary; defaults to
+                                class attribute.
         """
-        # TODO: get version and store it as attribute.
-
         if hmy_binary_path:
+            assert os.path.isfile(hmy_binary_path)
             self.hmy_binary_path = hmy_binary_path.replace("./", "")
         self.environment = environment
-        self.api_endpoints = api_endpoints
-        self.addresses = {}
-        self.keystore_path = None
-        self.update_addresses()
-        self.update_keystore_path()
+        self.version = ""
+        self.keystore_path = ""
+        self._addresses = {}
+        self._set_version()
+        self._set_keystore_path()
+        self._sync_addresses()
 
-    def update_keystore_path(self):
+    def __repr__(self):
+        return self.version
+
+    def _set_version(self):
+        """
+        Internal method to set this instance's version according to the binary's version.
+        """
+        proc = subprocess.Popen([self.hmy_binary_path, "version"], env=self.environment,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        out, err = proc.communicate()
+        if not err:
+            raise RuntimeError(f"Could not get version.\n"
+                               f"\tGot exit code {proc.returncode}. Expected non-empty error message.")
+        self.version = err.decode()
+
+    def _set_keystore_path(self):
+        """
+        Internal method to set this instance's keystore path with the binary's keystore path.
+        """
         try:
             response = self.single_call("hmy keys location").strip()
         except subprocess.CalledProcessError as err:
@@ -54,11 +67,14 @@ class HmyCLI:
             raise ValueError(f"'{response}' is not a valid path")
         self.keystore_path = response
 
-    def update_addresses(self):
+    def _sync_addresses(self):
+        """
+        Internal method to sync this instance's address with the binary's keystore addresses.
+        """
         try:
             response = self.single_call("hmy keys list")
         except subprocess.CalledProcessError as err:
-            raise RuntimeError(f"Could not list addresses.\n"
+            raise RuntimeError(f"Could not list _addresses.\n"
                                f"\tGot exit code {err.returncode}. Msg: {err.output}")
         lines = response.split("\n")
         if "NAME" not in lines[0] or "ADDRESS" not in lines[0]:
@@ -69,59 +85,53 @@ class HmyCLI:
                 if len(columns) != 2:
                     raise ValueError("Unexpected format of keys list")
                 name, address = columns
-                self.addresses[name.strip()] = address
+                self._addresses[name.strip()] = address
 
     def get_address(self, name):
-        if name in self.addresses:
-            return self.addresses[name]
+        """
+        :param name: The alias of a key used in the CLI's keystore.
+        :return: The associated 'one1...' address.
+        """
+        if name in self._addresses:
+            return self._addresses[name]
         else:
-            self.update_addresses()
-            return self.addresses.get(name, None)
+            self._sync_addresses()
+            return self._addresses.get(name, None)
 
     def remove_address(self, name):
+        """
+        :param name: The alias of a key used in the CLI's keystore.
+        """
         key_file_path = f"{self.keystore_path}/{name}"
         try:
             shutil.rmtree(key_file_path)
         except (shutil.Error, FileNotFoundError) as e:
             raise RuntimeError(f"Failed to delete dir: {key_file_path}\n"
                                f"\tException: {e}")
-        del self.addresses[name]
-
-    def get_balance(self, name, endpoint=0):
-        """
-        :param name: Alias of cli's keystore
-        :param endpoint: The index of the endpoint in api_endpoints ~ which shard's endpoint
-        :return: A dictionary containing the total balance and shard balances
-        """
-        assert endpoint < len(self.api_endpoints)
-        if name not in self.addresses:
-            self.update_addresses()
-        if name not in self.addresses:
-            return None
-        try:
-            response = self.single_call(f"hmy balance {self.addresses[name]} --node={self.api_endpoints[endpoint]}")
-            response = response.replace("\n", "")
-        except subprocess.CalledProcessError as err:
-            raise RuntimeError(f"[Critical] Could not get balance for '{name}'.\n"
-                               f"\tGot exit code {err.returncode}. Msg: {err.output}")
-        return eval(response)  # Assumes that the return of CLI is list of dictionaries in plain text.
+        del self._addresses[name]
 
     def single_call(self, command):
         """
         :param command: String fo command to execute on CLI
         :returns: Decoded string of response from hmy CLI call
-        :raises: subprocess.CalledProcessError if something went wrong
+        :raises: RuntimeError if CLI returns an error
         """
         command_toks = command.split(" ")
         if command_toks[0] in {"./hmy", "/hmy", "hmy"}:
             command_toks = command_toks[1:]
-        return subprocess.check_output([self.hmy_binary_path] + command_toks, env=self.environment).decode()
+        command_toks = [self.hmy_binary_path] + command_toks
+        proc = subprocess.Popen(command_toks, env=self.environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        out, err = proc.communicate()
+        if err:
+            raise RuntimeError(f"CLI returned error by executing {' '.join(command_toks)}\n"
+                               f"\tGot exit code {proc.returncode}. Msg: {err.decode()}")
+        return out.decode()
 
     def expect_call(self, command):
         """
         :param command: String fo command to execute on CLI
         :return: A pexpect child program
-        :raises: pexpect.ExceptionPexpect if something went wrong
+        :raises: pexpect.ExceptionPexpect if bad command
         """
         command_toks = command.split(" ")
         if command_toks[0] in {"./hmy", "/hmy", "hmy"}:
