@@ -1,13 +1,14 @@
 #!/usr/bin/env python
-import pyhmy
 from multiprocessing.pool import ThreadPool
 import multiprocessing
+import subprocess
 import os
 import shutil
 import logging
 import inspect
 import datetime
 import math
+import pyhmy
 
 # Use threading b/c this script mostly just calls the CLI to do the heavy lifting.
 
@@ -17,13 +18,11 @@ INITIAL_ACC_BALANCE = 10
 
 VERBOSE = True
 LOAD_KEYS_THREAD_COUNT = multiprocessing.cpu_count()
-ENDPOINTS = [
+ENDPOINTS = [  # Note that order matters for this script
     "https://api.s0.b.hmny.io/",  # Endpoint for shard 0
-    "https://api.s1.b.hmny.io/"  # Endpoint for shard 1
+    "https://api.s1.b.hmny.io/",  # Endpoint for shard 1
 ]
 
-
-# TODO abstract away the api and zip the testnet keys + use temp dir.
 
 # TODO fix duplicate name override on CLI
 # TODO define limits to be used by everybody
@@ -41,9 +40,23 @@ def log(message, error=True):
     if error:
         logging.warning(final_msg)
         if VERBOSE:
-            print(f"[ERROR] {final_msg}")
+            print(f"[LOGGED] {final_msg}")
     elif VERBOSE:
         print(final_msg)
+
+
+def get_balance(cli, name, shard=0):
+    assert shard < len(ENDPOINTS)
+    address = cli.get_address(name)
+    if not address:
+        return None
+    try:
+        response = cli.single_call(f"hmy balance {address} --node={ENDPOINTS[shard]}")
+        response = response.replace("\n", "")
+    except subprocess.CalledProcessError as err:
+        raise RuntimeError(f"Could not get balance for '{name}'.\n"
+                           f"\tGot exit code {err.returncode}. Msg: {err.output}")
+    return eval(response)  # Assumes that the return of CLI is list of dictionaries in plain text.
 
 
 def load_validator_keys(cli, src_keys_dir, quick_copy=False, get_funds=True):
@@ -74,7 +87,7 @@ def load_validator_keys(cli, src_keys_dir, quick_copy=False, get_funds=True):
                         continue
             if get_funds:
                 log(f"Fetching balance: ({i+start}) {file}", error=False)
-                funds[account_name] = cli.get_balance(account_name)
+                funds[account_name] = get_balance(cli, account_name)
 
     key_count = len(keys_paths)
     pool = ThreadPool(processes=LOAD_KEYS_THREAD_COUNT)
@@ -97,8 +110,9 @@ def fund_source_accounts(cli):
 
 if __name__ == "__main__":
     logging.basicConfig(filename="benchmark.log", filemode='a', format="%(message)s")
-    logging.warning(f"[{datetime.datetime.now()}] {'=' * 10}")
-    CLI = pyhmy.HmyCLI(environment=pyhmy.get_environment(), api_endpoints=ENDPOINTS)
+    logging.warning(f"[{datetime.datetime.now()}] {'=' * 20}")
+    CLI = pyhmy.HmyCLI(environment=pyhmy.get_environment())
+    log(f"[CLI Version] {CLI.version}")
 
     funds_report = load_validator_keys(CLI, "testnet_validator_keys", get_funds=True, quick_copy=True)
     print(funds_report)
