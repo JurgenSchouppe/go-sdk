@@ -36,7 +36,6 @@ prepare-dirs:
 	mkdir -p dist
 	rsync -a $(shell go env GOPATH)/src/github.com/harmony-one/bls/lib/* ./dist/lib/
 	rsync -a $(shell go env GOPATH)/src/github.com/harmony-one/mcl/lib/* ./dist/lib/
-	rsync -a /usr/local/opt/openssl/lib/* ./dist/lib/
 
 # Notice assumes you have correct uploading credentials
 upload-darwin:all
