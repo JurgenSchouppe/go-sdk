@@ -1,3 +1,4 @@
+SHELL := /bin/bash
 version := $(shell git rev-list --count HEAD)
 commit := $(shell git describe --always --long --dirty)
 built_at := $(shell date +%FT%T%z)
@@ -16,11 +17,11 @@ DIR := ${CURDIR}
 export CGO_LDFLAGS=-L$(DIR)/dist/lib -Wl,-rpath -Wl,\$ORIGIN/lib
 
 all:prepare-dirs
-	$(env) go build -o $(cli) -ldflags="$(ldflags)" cmd/main.go
+	source $(shell go env GOPATH)/src/github.com/harmony-one/harmony/scripts/setup_bls_build_flags.sh && $(env) go build -o $(cli) -ldflags="$(ldflags)" cmd/main.go
 	cp $(cli) hmy
 
 debug:prepare-dirs
-	$(env) go build $(flags) -o $(cli) -ldflags="$(ldflags)" cmd/main.go
+	source $(shell go env GOPATH)/src/github.com/harmony-one/harmony/scripts/setup_bls_build_flags.sh && $(env) go build $(flags) -o $(cli) -ldflags="$(ldflags)" cmd/main.go
 	cp $(cli) hmy
 
 
